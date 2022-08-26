@@ -326,7 +326,7 @@ static NTSTATUS dcerpc_pipe_connect_ncacn_ip_tcp_recv(struct composite_context *
 	NTSTATUS status = composite_wait(c);
 	
 	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(0,("failed NT status (%08x) in dcerpc_pipe_connect_ncacn_ip_tcp_recv\n", status));
+		DEBUG(1,("failed NT status (%08x) in dcerpc_pipe_connect_ncacn_ip_tcp_recv\n", status));
 	}
 
 	talloc_free(c);
@@ -787,7 +787,7 @@ NTSTATUS dcerpc_pipe_connect_b_recv(struct composite_context *c, TALLOC_CTX *mem
 	status = composite_wait(c);
 	
 	if (!NT_STATUS_IS_OK(status)) {
-		DEBUG(0,("failed NT status (%08x) in dcerpc_pipe_connect_b_recv\n", status));
+		DEBUG(1,("failed NT status (%08x) in dcerpc_pipe_connect_b_recv\n", status));
 	}
 
 	if (NT_STATUS_IS_OK(status)) {

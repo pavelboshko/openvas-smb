@@ -87,6 +87,9 @@ static void popt_common_credentials_callback(poptContext con,
 		break;
 
 	case OPT_PASSWORD:
+		if(dont_ask)
+			return;
+
 		cli_credentials_set_password(cmdline_credentials, arg, CRED_SPECIFIED);
 		/* Try to prevent this showing up in ps */
 		memset(discard_const(arg),0,strlen(arg));
