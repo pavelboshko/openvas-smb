@@ -163,36 +163,77 @@ char *string_CIMVAR(TALLOC_CTX *mem_ctx, union CIMVAR *v, enum CIMTYPE_ENUMERATI
 	}
 }
 
+WERROR print_plain(struct IWbemServices *pWS, struct IEnumWbemClassObject *pEnum, TALLOC_CTX *mem_ctx, char *delim)
+{
+	uint32_t cnt = 5, ret;
+	char *class_name = NULL;
+	WERROR result = WERR_OK;
+
+	do {
+		uint32_t i, j;
+		struct WbemClassObject *co[cnt];
+
+		result = IEnumWbemClassObject_SmartNext(pEnum, mem_ctx, 0xFFFFFFFF, cnt, co, &ret);
+		/* WERR_BADFUNC is OK, it means only that there is less returned objects than requested */
+		if (!W_ERROR_EQUAL(result, WERR_BADFUNC)) {
+			WERR_CHECK("Retrieve result data.");
+		} else {
+			DEBUG(1, ("OK   : Retrieved less objects than requested (it is normal).\n"));
+		}
+		if (!ret) break;
+
+		for (i = 0; i < ret; ++i) {
+			if (!class_name || strcmp(co[i]->obj_class->__CLASS, class_name)) {
+				if (class_name) talloc_free(class_name);
+				class_name = talloc_strdup(mem_ctx, co[i]->obj_class->__CLASS);
+				printf("CLASS: %s\n", class_name);
+				for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j)
+					printf("%s%s", j?delim:"", co[i]->obj_class->properties[j].name);
+				printf("\n");
+			}
+			for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j) {
+				char *s;
+				s = string_CIMVAR(mem_ctx, &co[i]->instance->data[j], co[i]->obj_class->properties[j].desc->cimtype & CIM_TYPEMASK);
+				printf("%s%s", j?delim:"", s);
+			}
+			printf("\n");
+		}
+	} while (ret == cnt);
+error:
+	return result;
+}
+
 #define CHECK_POINTER(ptr, msg) if (!ptr) { \
 		DEBUG(0, ("%s: Out of memory\n", msg)); \
-		goto memory_error; \
+		result = WERR_OK; \
+		goto error; \
 	}
 
-#define ADD_FIELD_WITHOUT_VALUE_TO_JSON(str) \
+#define ADD_FIELD_WITHOUT_VALUE_TO_JSON(str, stype) \
 do { \
 	cJSON *data = cJSON_AddObjectToObject(container_obj, name); \
 	if (data) { \
-		cJSON_AddNumberToObject(data, "type", (uint32_t)cimtype); \
+		cJSON_AddStringToObject(data, "type", stype); \
 		cJSON_AddStringToObject(data, "value", str); \
 	} \
 } while (0)
 
-#define ADD_FIELD_TO_JSON(fmt, value) \
+#define ADD_FIELD_TO_JSON(fmt, value, stype) \
 do { \
 	cJSON *data = cJSON_AddObjectToObject(container_obj, name); \
 	if (data) { \
-		cJSON_AddNumberToObject(data, "type", (uint32_t)cimtype); \
+		cJSON_AddStringToObject(data, "type", stype); \
 		char *s = talloc_asprintf(mem_ctx, fmt, value); \
 		cJSON_AddStringToObject(data, "value", s); \
 	} \
 } while (0)
 
-#define ADD_ARRAY_FIELD_TO_JSON(fmt, arr, type) \
+#define ADD_ARRAY_FIELD_TO_JSON(fmt, arr, type, stype) \
 do { \
 	uint32_t i; \
 	cJSON *data = cJSON_AddObjectToObject(container_obj, name); \
 	if (data) { \
-		cJSON_AddNumberToObject(data, "type", (uint32_t)cimtype); \
+		cJSON_AddStringToObject(data, "type", stype); \
 		cJSON *value_array = cJSON_AddArrayToObject(data, "values"); \
 		if (value_array && arr) { \
 			for (i = 0; i < arr->count; ++i) { \
@@ -208,54 +249,109 @@ void CIMVAR_to_cJSON(TALLOC_CTX *mem_ctx, cJSON *container_obj, const char *name
 					 enum CIMTYPE_ENUMERATION cimtype)
 {
 	switch (cimtype) {
-        case CIM_SINT8: ADD_FIELD_TO_JSON("%d", v->v_sint8); break;
-        case CIM_UINT8: ADD_FIELD_TO_JSON("%u", v->v_uint8); break;
-        case CIM_SINT16: ADD_FIELD_TO_JSON("%d", v->v_sint16); break;
-        case CIM_UINT16: ADD_FIELD_TO_JSON("%u", v->v_uint16); break;
-        case CIM_SINT32: ADD_FIELD_TO_JSON("%d", v->v_sint32); break;
-        case CIM_UINT32: ADD_FIELD_TO_JSON("%u", v->v_uint32); break;
-        case CIM_SINT64: ADD_FIELD_TO_JSON("%ld", v->v_sint64); break;
-        case CIM_UINT64: ADD_FIELD_TO_JSON("%lu", v->v_uint64); break;
-        case CIM_REAL32: ADD_FIELD_TO_JSON("%f", (double)v->v_uint32); break;
-        case CIM_REAL64: ADD_FIELD_TO_JSON("%f", (double)v->v_uint64); break;
-        case CIM_BOOLEAN: ADD_FIELD_TO_JSON("%d", v->v_boolean); break;
-        case CIM_STRING:
-        case CIM_DATETIME:
-        case CIM_REFERENCE: ADD_FIELD_TO_JSON("%s", v->v_string); break;
-        case CIM_CHAR16: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported"); break;
-        case CIM_OBJECT: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported"); break;
-        case CIM_ARR_SINT8: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint8, int8_t); break;
-        case CIM_ARR_UINT8: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint8, uint8_t); break;
-        case CIM_ARR_SINT16: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint16, int16_t); break;
-        case CIM_ARR_UINT16: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint16, uint16_t); break;
-        case CIM_ARR_SINT32: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint32, int32_t); break;
-        case CIM_ARR_UINT32: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint32, uint32_t); break;
-        case CIM_ARR_SINT64: ADD_ARRAY_FIELD_TO_JSON("%ld", v->a_sint64, int64_t); break;
-        case CIM_ARR_UINT64: ADD_ARRAY_FIELD_TO_JSON("%lu", v->a_uint64, uint64_t); break;
-        case CIM_ARR_REAL32: ADD_ARRAY_FIELD_TO_JSON("%f", v->a_real32, double); break;
-        case CIM_ARR_REAL64: ADD_ARRAY_FIELD_TO_JSON("%f", v->a_real64, double); break;
-        case CIM_ARR_BOOLEAN: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_boolean, uint16_t); break;
-        case CIM_ARR_STRING: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_string, const char *); break;
-        case CIM_ARR_DATETIME: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_datetime, const char *); break;
-        case CIM_ARR_REFERENCE: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_reference, const char *); break;
-	default: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported");
+        case CIM_SINT8: ADD_FIELD_TO_JSON("%d", v->v_sint8, "int8"); break;
+        case CIM_UINT8: ADD_FIELD_TO_JSON("%u", v->v_uint8, "uint8"); break;
+        case CIM_SINT16: ADD_FIELD_TO_JSON("%d", v->v_sint16, "int16"); break;
+        case CIM_UINT16: ADD_FIELD_TO_JSON("%u", v->v_uint16, "uint16"); break;
+        case CIM_SINT32: ADD_FIELD_TO_JSON("%d", v->v_sint32, "int32"); break;
+        case CIM_UINT32: ADD_FIELD_TO_JSON("%u", v->v_uint32, "uint32"); break;
+        case CIM_SINT64: ADD_FIELD_TO_JSON("%ld", v->v_sint64, "int64"); break;
+        case CIM_UINT64: ADD_FIELD_TO_JSON("%lu", v->v_uint64, "uint64"); break;
+        case CIM_REAL32: ADD_FIELD_TO_JSON("%f", (double)v->v_uint32, "double"); break;
+        case CIM_REAL64: ADD_FIELD_TO_JSON("%f", (double)v->v_uint64, "double"); break;
+        case CIM_BOOLEAN: ADD_FIELD_TO_JSON("%d", v->v_boolean, "bool"); break;
+        case CIM_STRING: ADD_FIELD_TO_JSON("%s", v->v_string, "string"); break;
+        case CIM_DATETIME: ADD_FIELD_TO_JSON("%s", v->v_string, "datetime"); break;
+        case CIM_REFERENCE: ADD_FIELD_TO_JSON("%s", v->v_string, "reference"); break;
+        case CIM_CHAR16: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported", "char16"); break;
+        case CIM_OBJECT: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported", "object"); break;
+        case CIM_ARR_SINT8: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint8, int8_t, "int8"); break;
+        case CIM_ARR_UINT8: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint8, uint8_t, "uint8"); break;
+        case CIM_ARR_SINT16: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint16, int16_t, "int16"); break;
+        case CIM_ARR_UINT16: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint16, uint16_t, "uint16"); break;
+        case CIM_ARR_SINT32: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_sint32, int32_t, "int32"); break;
+        case CIM_ARR_UINT32: ADD_ARRAY_FIELD_TO_JSON("%u", v->a_uint32, uint32_t, "uint32"); break;
+        case CIM_ARR_SINT64: ADD_ARRAY_FIELD_TO_JSON("%ld", v->a_sint64, int64_t, "int64"); break;
+        case CIM_ARR_UINT64: ADD_ARRAY_FIELD_TO_JSON("%lu", v->a_uint64, uint64_t, "uint64"); break;
+        case CIM_ARR_REAL32: ADD_ARRAY_FIELD_TO_JSON("%f", v->a_real32, double, "double"); break;
+        case CIM_ARR_REAL64: ADD_ARRAY_FIELD_TO_JSON("%f", v->a_real64, double, "double"); break;
+        case CIM_ARR_BOOLEAN: ADD_ARRAY_FIELD_TO_JSON("%d", v->a_boolean, uint16_t, "bool"); break;
+        case CIM_ARR_STRING: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_string, const char *, "string"); break;
+        case CIM_ARR_DATETIME: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_datetime, const char *, "datetime"); break;
+        case CIM_ARR_REFERENCE: ADD_ARRAY_FIELD_TO_JSON("%s", v->a_reference, const char *, "reference"); break;
+	default: ADD_FIELD_WITHOUT_VALUE_TO_JSON("Unsupported", "unknown");
 	}
 }
 
 #undef RETURN_CVAR_ARRAY_STR
 
-int main(int argc, char **argv)
+WERROR print_json(struct IWbemServices *pWS, struct IEnumWbemClassObject *pEnum, TALLOC_CTX *mem_ctx)
 {
-	struct program_args args = {};
 	uint32_t cnt = 5, ret;
-	char *class_name = NULL;
-	WERROR result;
-	NTSTATUS status;
-	struct IWbemServices *pWS = NULL;
+	WERROR result = WERR_OK;
 	cJSON *root_obj = NULL;
 	cJSON *array_of_classes = NULL;
 	cJSON *class_obj = NULL;
 	cJSON *class_data = NULL;
+
+	root_obj = cJSON_CreateObject();
+	CHECK_POINTER(root_obj, "Root json object");
+
+	array_of_classes = cJSON_AddArrayToObject(root_obj, "classes");
+	CHECK_POINTER(root_obj, "Json array of classes");
+
+	do {
+		uint32_t i, j;
+		struct WbemClassObject *co[cnt];
+
+		result = IEnumWbemClassObject_SmartNext(pEnum, mem_ctx, 0xFFFFFFFF, cnt, co, &ret);
+		/* WERR_BADFUNC is OK, it means only that there is less returned objects than requested */
+		if (!W_ERROR_EQUAL(result, WERR_BADFUNC)) {
+			WERR_CHECK("Retrieve result data.");
+		} else {
+			DEBUG(1, ("OK   : Retrieved less objects than requested (it is normal).\n"));
+		}
+		if (!ret) break;
+
+		for (i = 0; i < ret; ++i) {
+			if (   !class_obj
+				||  strcmp(co[i]->obj_class->__CLASS,
+							cJSON_GetStringValue(cJSON_GetObjectItem(class_obj, "class")))) {
+				class_obj = cJSON_CreateObject();
+				CHECK_POINTER(class_obj, "Class json object");
+				cJSON_AddItemToArray(array_of_classes, class_obj);
+				CHECK_POINTER(cJSON_AddStringToObject(class_obj, "class", co[i]->obj_class->__CLASS),
+								"Json class name");
+				class_data = cJSON_AddArrayToObject(class_obj, "data");
+				CHECK_POINTER(class_data, "Json class data");
+			}
+			cJSON *data_obj = cJSON_CreateObject();
+			CHECK_POINTER(data_obj, "Json data object");
+			cJSON_AddItemToArray(class_data, data_obj);
+			for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j) {
+				CIMVAR_to_cJSON(mem_ctx, data_obj, co[i]->obj_class->properties[j].name, &co[i]->instance->data[j],
+								co[i]->obj_class->properties[j].desc->cimtype & CIM_TYPEMASK);
+			}
+		}
+	} while (ret == cnt);
+
+	/* char *s = cJSON_Print(root_obj); */
+	char *s = cJSON_PrintUnformatted(root_obj);
+	printf("%s\n", s);
+	free(s);
+
+error:
+	if (root_obj)
+		cJSON_Delete(root_obj);
+	return result;
+}
+
+int main(int argc, char **argv)
+{
+	struct program_args args = {};
+	WERROR result;
+	NTSTATUS status;
+	struct IWbemServices *pWS = NULL;
 
     parse_args(argc, argv, &args);
 
@@ -288,87 +384,13 @@ int main(int argc, char **argv)
 	IEnumWbemClassObject_Reset(pEnum, ctx);
 	WERR_CHECK("Reset result of WMI query.");
 
-	if (args.print_json)
-	{
-		root_obj = cJSON_CreateObject();
-		CHECK_POINTER(root_obj, "Root json object");
+	result = args.print_json ? print_json(pWS, pEnum, ctx) : print_plain(pWS, pEnum, ctx, args.delim);
 
-		array_of_classes = cJSON_AddArrayToObject(root_obj, "classes");
-		CHECK_POINTER(root_obj, "Json array of classes");
-	}
-
-	do {
-		uint32_t i, j;
-		struct WbemClassObject *co[cnt];
-
-		result = IEnumWbemClassObject_SmartNext(pEnum, ctx, 0xFFFFFFFF, cnt, co, &ret);
-		/* WERR_BADFUNC is OK, it means only that there is less returned objects than requested */
-		if (!W_ERROR_EQUAL(result, WERR_BADFUNC)) {
-			WERR_CHECK("Retrieve result data.");
-		} else {
-			DEBUG(1, ("OK   : Retrieved less objects than requested (it is normal).\n"));
-		}
-		if (!ret) break;
-
-		if (args.print_json) {
-			for (i = 0; i < ret; ++i) {
-				if (   !class_obj
-				    ||  strcmp(co[i]->obj_class->__CLASS,
-						   	   cJSON_GetStringValue(cJSON_GetObjectItem(class_obj, "class")))) {
-					class_obj = cJSON_CreateObject();
-					CHECK_POINTER(class_obj, "Class json object");
-					cJSON_AddItemToArray(array_of_classes, class_obj);
-					CHECK_POINTER(cJSON_AddStringToObject(class_obj, "class", co[i]->obj_class->__CLASS),
-								  "Json class name");
-					class_data = cJSON_AddArrayToObject(class_obj, "data");
-					CHECK_POINTER(class_data, "Json class data");
-				}
-				cJSON *data_obj = cJSON_CreateObject();
-				CHECK_POINTER(data_obj, "Json data object");
-				cJSON_AddItemToArray(class_data, data_obj);
-				for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j) {
-					CIMVAR_to_cJSON(ctx, data_obj, co[i]->obj_class->properties[j].name, &co[i]->instance->data[j],
-									co[i]->obj_class->properties[j].desc->cimtype & CIM_TYPEMASK);
-				}
-			}
-		} else {
-			for (i = 0; i < ret; ++i) {
-				if (!class_name || strcmp(co[i]->obj_class->__CLASS, class_name)) {
-					if (class_name) talloc_free(class_name);
-					class_name = talloc_strdup(ctx, co[i]->obj_class->__CLASS);
-					printf("CLASS: %s\n", class_name);
-					for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j)
-						printf("%s%s", j?args.delim:"", co[i]->obj_class->properties[j].name);
-					printf("\n");
-				}
-				for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j) {
-					char *s;
-					s = string_CIMVAR(ctx, &co[i]->instance->data[j], co[i]->obj_class->properties[j].desc->cimtype & CIM_TYPEMASK);
-					printf("%s%s", j?args.delim:"", s);
-				}
-				printf("\n");
-			}
-		}
-	} while (ret == cnt);
-
-	if (args.print_json) {
-		/* char *s = cJSON_Print(root_obj); */
-		char *s = cJSON_PrintUnformatted(root_obj);
-		printf("%s\n", s);
-		free(s);
-	}
-	if (root_obj)
-		cJSON_Delete(root_obj);
-	talloc_free(ctx);
-	return 0;
 error:
-	status = werror_to_ntstatus(result);
-	fprintf(stderr, "NTSTATUS: %s - %s\n", nt_errstr(status), get_friendly_nt_error_msg(status));
+    if (!W_ERROR_IS_OK(result)) {
+		status = werror_to_ntstatus(result);
+		fprintf(stderr, "NTSTATUS: %s - %s\n", nt_errstr(status), get_friendly_nt_error_msg(status));
+	}
 	talloc_free(ctx);
-	return 1;
-memory_error:
-	if (root_obj)
-		cJSON_Delete(root_obj);
-	talloc_free(ctx);
-	return 2;
+	return W_ERROR_IS_OK(result) ? 0 : 1;
 }
