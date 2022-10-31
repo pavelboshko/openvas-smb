@@ -214,7 +214,7 @@ do { \
 	cJSON *data = cJSON_AddObjectToObject(container_obj, name); \
 	if (data) { \
 		cJSON_AddStringToObject(data, "type", stype); \
-		cJSON_AddStringToObject(data, "value", str); \
+		cJSON_AddStringToObject(data, "data", str); \
 	} \
 } while (0)
 
@@ -224,7 +224,7 @@ do { \
 	if (data) { \
 		cJSON_AddStringToObject(data, "type", stype); \
 		char *s = talloc_asprintf(mem_ctx, fmt, value); \
-		cJSON_AddStringToObject(data, "value", s); \
+		cJSON_AddStringToObject(data, "data", s); \
 	} \
 } while (0)
 
@@ -234,12 +234,12 @@ do { \
 	cJSON *data = cJSON_AddObjectToObject(container_obj, name); \
 	if (data) { \
 		cJSON_AddStringToObject(data, "type", stype); \
-		cJSON *value_array = cJSON_AddArrayToObject(data, "values"); \
+		cJSON *value_array = cJSON_AddArrayToObject(data, "data"); \
 		if (value_array && arr) { \
 			for (i = 0; i < arr->count; ++i) { \
 				char *s = talloc_asprintf(mem_ctx, fmt, (type)arr->item[i]); \
 				cJSON *item = cJSON_CreateString(s); \
-				cJSON_AddItemToArray(data, item); \
+				cJSON_AddItemToArray(value_array, item); \
 			} \
 		} \
 	} \
@@ -289,17 +289,7 @@ WERROR print_json(struct IWbemServices *pWS, struct IEnumWbemClassObject *pEnum,
 {
 	uint32_t cnt = 5, ret;
 	WERROR result = WERR_OK;
-	cJSON *root_obj = NULL;
-	cJSON *array_of_classes = NULL;
 	cJSON *class_obj = NULL;
-	cJSON *class_data = NULL;
-
-	root_obj = cJSON_CreateObject();
-	CHECK_POINTER(root_obj, "Root json object");
-
-	array_of_classes = cJSON_AddArrayToObject(root_obj, "classes");
-	CHECK_POINTER(root_obj, "Json array of classes");
-
 	do {
 		uint32_t i, j;
 		struct WbemClassObject *co[cnt];
@@ -314,35 +304,40 @@ WERROR print_json(struct IWbemServices *pWS, struct IEnumWbemClassObject *pEnum,
 		if (!ret) break;
 
 		for (i = 0; i < ret; ++i) {
-			if (   !class_obj
-				||  strcmp(co[i]->obj_class->__CLASS,
-							cJSON_GetStringValue(cJSON_GetObjectItem(class_obj, "class")))) {
-				class_obj = cJSON_CreateObject();
-				CHECK_POINTER(class_obj, "Class json object");
-				cJSON_AddItemToArray(array_of_classes, class_obj);
-				CHECK_POINTER(cJSON_AddStringToObject(class_obj, "class", co[i]->obj_class->__CLASS),
-								"Json class name");
-				class_data = cJSON_AddArrayToObject(class_obj, "data");
-				CHECK_POINTER(class_data, "Json class data");
+			class_obj = cJSON_CreateObject();
+			CHECK_POINTER(class_obj, "Class object");
+			CHECK_POINTER(cJSON_AddStringToObject(class_obj, "__CLASS", co[i]->obj_class->__CLASS),
+							"Class name");
+			cJSON *derivation_array = cJSON_AddArrayToObject(class_obj, "__DERIVATION");
+			CHECK_POINTER(derivation_array, "Class derivation");
+			for (j = 0; j < co[i]->obj_class->__DERIVATION.count; ++j) {
+				cJSON *item = cJSON_CreateString(co[i]->obj_class->__DERIVATION.item[j]);
+				cJSON_AddItemToArray(derivation_array, item);
 			}
-			cJSON *data_obj = cJSON_CreateObject();
-			CHECK_POINTER(data_obj, "Json data object");
-			cJSON_AddItemToArray(class_data, data_obj);
-			for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j) {
-				CIMVAR_to_cJSON(mem_ctx, data_obj, co[i]->obj_class->properties[j].name, &co[i]->instance->data[j],
+			CHECK_POINTER(cJSON_AddStringToObject(class_obj, "__SERVER", co[i]->__SERVER),
+							"Server name");
+			CHECK_POINTER(cJSON_AddStringToObject(class_obj, "__NAMESPACE", co[i]->__NAMESPACE),
+							"Namespace");
+			CHECK_POINTER(cJSON_AddNumberToObject(class_obj, "__PROPERTY_COUNT", co[i]->obj_class->__PROPERTY_COUNT),
+							"Property count");
+			cJSON *properties = cJSON_AddObjectToObject(class_obj, "Properties");
+			CHECK_POINTER(properties, "Properties");
+			for (j = 0; j < co[i]->obj_class->__PROPERTY_COUNT; ++j)
+				CIMVAR_to_cJSON(mem_ctx, properties, co[i]->obj_class->properties[j].name, &co[i]->instance->data[j],
 								co[i]->obj_class->properties[j].desc->cimtype & CIM_TYPEMASK);
-			}
+
+			/*char *s = cJSON_Print(class_obj); */
+			char *s = cJSON_PrintUnformatted(class_obj);
+			printf("%s\n", s);
+			free(s);
+			cJSON_Delete(class_obj);
+			class_obj = NULL;
 		}
 	} while (ret == cnt);
 
-	/* char *s = cJSON_Print(root_obj); */
-	char *s = cJSON_PrintUnformatted(root_obj);
-	printf("%s\n", s);
-	free(s);
-
 error:
-	if (root_obj)
-		cJSON_Delete(root_obj);
+	if (class_obj)
+		cJSON_Delete(class_obj);
 	return result;
 }
 
@@ -365,6 +360,7 @@ int main(int argc, char **argv)
 	dcom_proxy_IUnknown_init();
 	dcom_proxy_IWbemLevel1Login_init();
 	dcom_proxy_IWbemServices_init();
+	dcom_proxy_IWbemClassObject_init();
 	dcom_proxy_IEnumWbemClassObject_init();
 	dcom_proxy_IRemUnknown_init();
 	dcom_proxy_IWbemFetchSmartEnum_init();
