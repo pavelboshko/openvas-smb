@@ -60,7 +60,7 @@ set_target_properties (openvas_wmiclient PROPERTIES VERSION "${CPACK_PACKAGE_VER
 set_target_properties (openvas_wmiclient PROPERTIES PUBLIC_HEADER "${WMI_HDR}")
 set_target_properties (openvas_wmiclient PROPERTIES LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/wmiclient.map")
 
-add_executable(wmic wmic.c ${WMI_SHARED_SRC} ${CMAKE_SOURCE_DIR}/cJSON/cJSON.c)
+add_executable(wmic wmicservice.c ${WMI_SHARED_SRC} ${CMAKE_SOURCE_DIR}/cJSON/cJSON.c)
 target_link_libraries(wmic openvas_wmiclient samba-static ${GNUTLS_LIBRARIES}  ${POPT_LIBRARIES} dl ${LINKER_HARDENING_FLAGS})
 install (TARGETS wmic RUNTIME DESTINATION ${BINDIR})
 
