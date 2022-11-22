@@ -126,8 +126,7 @@ bool check_not_error(WERROR err)
 	if (!is_not_error)
 	{
 		NTSTATUS status = werror_to_ntstatus(err);
-		fprintf(stdout, "NTSTATUS: %s - %s\n", nt_errstr(status), get_friendly_nt_error_msg(status));
-		fflush(stdout);
+		fprintf(stderr, "NTSTATUS: %s - %s\n", nt_errstr(status), get_friendly_nt_error_msg(status));
 	}
 	return is_not_error;
 }
@@ -219,7 +218,7 @@ int check_input(int timeout)
 
 #define CHECK_POINTER(ptr, msg) if (!ptr) { \
 		DEBUG(0, ("%s: Out of memory\n", msg)); \
-		rc = CHK_NOTHING; \
+		rc = CHK_ERROR; \
 		goto error; \
 	}
 
@@ -312,7 +311,7 @@ int print_json(struct IWbemServices *pWS, struct IEnumWbemClassObject *pEnum, TA
 		/* WERR_BADFUNC is OK, it means only that there is less returned objects than requested */
 		if (!W_ERROR_EQUAL(result, WERR_BADFUNC)) {
 			if (!check_not_error(result))
-				return rc;
+				return CHK_ERROR;
 		} else {
 			DEBUG(1, ("OK   : Retrieved less objects than requested (it is normal).\n"));
 		}
@@ -363,7 +362,7 @@ error:
 
 void interrupt_handler(int signal_num) {
 
-	if(signal_num == SIGINT) { // handle Ctrl-C
+	if(signal_num == SIGINT || signal_num == SIGQUIT) { // handle Ctrl-C
 		// if not reset since last call, exit
 		if (terminate_flag > 0)
 			exit(EXIT_FAILURE);
@@ -427,23 +426,30 @@ int main(int argc, char **argv)
 		{
 			if (query.timeout < 1)
 				query.timeout = 1;
+
 			struct timeval timestamp_orig = timeval_current();
 			struct timeval timestamp = timeval_add(&timestamp_orig, query.timeout, 0);  /* timeval_current_ofs(query.timeout, 0); */
 			struct IEnumWbemClassObject *pEnum = NULL;
-			if (check_not_error(IWbemServices_ExecQuery(pWS, ctx, "WQL", query.text,
+			WERROR result = IWbemServices_ExecQuery(pWS, ctx, "WQL", query.text,
 					WBEM_FLAG_RETURN_IMMEDIATELY | WBEM_FLAG_ENSURE_LOCATABLE,
-					NULL, &pEnum))
-				&& !timeval_expired(&timestamp))
+					NULL, &pEnum);
+			if (check_not_error(result) && !timeval_expired(&timestamp))
 			{
-				if (check_not_error(IEnumWbemClassObject_Reset(pEnum, ctx))
-					&& !timeval_expired(&timestamp))
+				result = IEnumWbemClassObject_Reset(pEnum, ctx);
+				if (check_not_error(result) && !timeval_expired(&timestamp))
+				{
 					rc = print_json(pWS, pEnum, ctx, &timestamp);
+					if (rc == CHK_ERROR)
+						break;
+				}
 			}
+			if (!W_ERROR_IS_OK(result))
+				break;
+
 			fprintf(stdout, "\n");
 			fflush(stdout);
 		}
 	}
-
 	talloc_free(ctx);
-	return 0;
+	return rc == CHK_ERROR ? 1 : 0;
 }
