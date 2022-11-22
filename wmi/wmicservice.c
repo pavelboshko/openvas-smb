@@ -38,6 +38,7 @@
 #include <cJSON.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define INFINITE_TIMEOUT (-1)
 
